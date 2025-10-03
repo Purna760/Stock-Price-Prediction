@@ -42,10 +42,6 @@ st.markdown("""
         color: red;
         font-weight: bold;
     }
-    .ticker-button {
-        width: 100%;
-        margin: 5px 0;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -57,10 +53,6 @@ st.sidebar.header("📊 Configuration")
 
 # Stock selection with default value
 ticker = st.sidebar.text_input("Enter Stock Ticker", "AAPL").upper()
-
-# Use fixed date range to avoid issues
-start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2020-01-01"))
-end_date = st.sidebar.date_input("End Date", pd.to_datetime("2023-12-31"))
 
 # Model selection
 model_choice = st.sidebar.selectbox(
@@ -125,24 +117,20 @@ def calculate_price_roc(prices, window=10):
         return pd.Series([np.nan] * len(prices), index=prices.index)
 
 def load_stock_data_simple(ticker_symbol):
-    """Simple and robust stock data loading"""
+    """Simple and robust stock data loading without date filtering"""
     try:
         # Create ticker object
         stock = yf.Ticker(ticker_symbol)
         
-        # Get historical data for max period
-        data = stock.history(period="max")
+        # Get historical data for 3 years (enough data for ML)
+        data = stock.history(period="3y")
         
         if data.empty:
             return None, f"No data found for {ticker_symbol}"
             
-        # Filter for our date range
-        mask = (data.index >= pd.Timestamp('2020-01-01')) & (data.index <= pd.Timestamp('2023-12-31'))
-        data = data.loc[mask]
+        # Remove timezone information to avoid comparison issues
+        data.index = data.index.tz_localize(None)
         
-        if data.empty:
-            return None, f"No data in date range for {ticker_symbol}"
-            
         # Ensure numeric columns
         numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
         for col in numeric_cols:
@@ -152,10 +140,13 @@ def load_stock_data_simple(ticker_symbol):
         # Remove any rows with NaN in essential columns
         data = data.dropna(subset=['Open', 'High', 'Low', 'Close'])
         
+        if len(data) < 30:
+            return None, f"Only {len(data)} days of data available. Need at least 30 days."
+            
         return data, "Success"
         
     except Exception as e:
-        return None, f"Error: {str(e)}"
+        return None, f"Error loading {ticker_symbol}: {str(e)}"
 
 @st.cache_data
 def load_stock_data(_ticker):
@@ -330,7 +321,7 @@ def create_interactive_chart(df):
             row_heights=[0.7, 0.3]
         )
         
-        # Price data - use line chart instead of candlestick for simplicity
+        # Price data
         fig.add_trace(
             go.Scatter(
                 x=df.index,
@@ -381,35 +372,33 @@ def main():
     st.sidebar.header("🚀 Quick Test")
     popular_tickers = ["AAPL", "TSLA", "GOOGL", "MSFT", "AMZN", "META", "NVDA", "NFLX"]
     
-    cols = st.sidebar.columns(2)
-    selected_ticker = ticker  # Start with the input value
+    # Display popular tickers as buttons
+    selected_ticker = ticker
     
+    cols = st.sidebar.columns(2)
     for i, tick in enumerate(popular_tickers):
         with cols[i % 2]:
-            if st.button(tick, key=f"btn_{tick}"):
+            if st.button(tick, key=f"btn_{tick}", use_container_width=True):
                 selected_ticker = tick
     
-    # Use the selected ticker (either from input or button)
+    # Use the selected ticker
     current_ticker = selected_ticker
     
     try:
         # Load data
-        with st.spinner(f'Loading data for {current_ticker}...'):
+        with st.spinner(f'📥 Loading data for {current_ticker}...'):
             data, message = load_stock_data(current_ticker)
         
         if data is None:
             st.error(f"❌ {message}")
+            
             st.info("💡 **Try these popular stocks:**")
-            
-            # Display popular tickers in the main area too
-            col1, col2, col3, col4 = st.columns(4)
-            all_tickers = popular_tickers
-            
-            for i, tick in enumerate(all_tickers):
-                with [col1, col2, col3, col4][i % 4]:
-                    if st.button(f"📈 {tick}", key=f"main_btn_{tick}"):
-                        # This will refresh the app with the new ticker
-                        st.experimental_set_query_params(ticker=tick)
+            # Display popular tickers in the main area
+            main_cols = st.columns(4)
+            for i, tick in enumerate(popular_tickers):
+                with main_cols[i % 4]:
+                    if st.button(f"📈 {tick}", key=f"main_btn_{tick}", use_container_width=True):
+                        st.session_state.selected_ticker = tick
                         st.rerun()
             return
         
@@ -485,7 +474,7 @@ def main():
             model, scaler, X_test, y_test, y_pred = train_model(X, y, model_choice)
             
             if model is None:
-                st.error("❌ Model training failed - not enough data")
+                st.error("❌ Model training failed")
                 return
         
         # Calculate metrics
@@ -502,6 +491,14 @@ def main():
             st.metric("R² Score", f"{metrics['R2 Score']:.4f}")
         with metric_cols[3]:
             st.metric("Direction Accuracy", f"{metrics['Direction Accuracy']:.1%}")
+        
+        # Prediction vs Actual chart
+        if len(y_test) > 0:
+            fig_pred = go.Figure()
+            fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_test.values, name='Actual', line=dict(color='blue')))
+            fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_pred, name='Predicted', line=dict(color='red', dash='dash')))
+            fig_pred.update_layout(title='Actual vs Predicted Prices', xaxis_title='Date', yaxis_title='Price')
+            st.plotly_chart(fig_pred, use_container_width=True)
         
         # Future Prediction
         st.subheader("🔮 Future Price Prediction")
@@ -558,7 +555,7 @@ def main():
         
     except Exception as e:
         st.error(f"❌ Application error: {str(e)}")
-        st.info("💡 Try clicking one of the popular stock buttons above")
+        st.info("💡 Try clicking one of the popular stock buttons in the sidebar")
     
     # Risk Disclaimer
     st.warning("""
