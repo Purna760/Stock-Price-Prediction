@@ -35,18 +35,18 @@ st.markdown("""
         margin: 0.5rem 0;
     }
     .prediction-positive {
-        color: #00ff00;
+        color: green;
         font-weight: bold;
     }
     .prediction-negative {
-        color: #ff0000;
+        color: red;
         font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # App title
-st.markdown('<h1 class="main-header">🚀 Advanced Stock Price Predictor</h1>', unsafe_html=True)
+st.markdown('<h1 class="main-header">🚀 Advanced Stock Price Predictor</h1>', unsafe_allow_html=True)
 
 # Sidebar
 st.sidebar.header("📊 Configuration")
@@ -406,11 +406,12 @@ def main():
         st.metric("Direction Accuracy", f"{metrics['Direction Accuracy']:.1%}")
     
     # Prediction vs Actual chart
-    fig_pred = go.Figure()
-    fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_test.values, name='Actual', line=dict(color='blue')))
-    fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_pred, name='Predicted', line=dict(color='red', dash='dash')))
-    fig_pred.update_layout(title='Actual vs Predicted Prices', xaxis_title='Date', yaxis_title='Price')
-    st.plotly_chart(fig_pred, use_container_width=True)
+    if len(y_test) > 0:
+        fig_pred = go.Figure()
+        fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_test.values, name='Actual', line=dict(color='blue')))
+        fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_pred, name='Predicted', line=dict(color='red', dash='dash')))
+        fig_pred.update_layout(title='Actual vs Predicted Prices', xaxis_title='Date', yaxis_title='Price')
+        st.plotly_chart(fig_pred, use_container_width=True)
     
     # Future Prediction
     st.subheader("🔮 Future Price Prediction")
@@ -432,8 +433,8 @@ def main():
         with pred_col2:
             st.metric(f"Predicted in {forecast_days} days", f"${future_prediction:.2f}")
         with pred_col3:
-            change_color = "prediction-positive" if pred_change > 0 else "prediction-negative"
-            st.markdown(f'<div class="metric-card {change_color}">Expected Change: ${pred_change:.2f} ({pred_change_pct:.2f}%)</div>', unsafe_allow_html=True)
+            change_class = "prediction-positive" if pred_change > 0 else "prediction-negative"
+            st.markdown(f'<div class="{change_class}">Expected Change: ${pred_change:.2f} ({pred_change_pct:.2f}%)</div>', unsafe_allow_html=True)
         
         # Feature Importance (for tree-based models)
         if hasattr(model, 'feature_importances_'):
