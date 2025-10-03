@@ -1,133 +1,421 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import yfinance as yf
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.svm import SVR
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
-import matplotlib.pyplot as plt
-import seaborn as sns
+import talib
+from prophet import Prophet
+import warnings
+warnings.filterwarnings('ignore')
+
+# Page configuration
+st.set_page_config(
+    page_title="Advanced Stock Predictor",
+    page_icon="📈",
+    layout="wide"
+)
+
+# Custom CSS
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 3rem;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 10px;
+        margin: 0.5rem 0;
+    }
+    .prediction-positive {
+        color: #00ff00;
+        font-weight: bold;
+    }
+    .prediction-negative {
+        color: #ff0000;
+        font-weight: bold;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # App title
-st.title("🤖 Mobile Machine Learning App")
-st.write("Build and deploy ML models directly from your phone!")
+st.markdown('<h1 class="main-header">🚀 Advanced Stock Price Predictor</h1>', unsafe_allow_html=True)
 
-# Sample dataset or file upload
-st.sidebar.header("1. Data Input")
-data_option = st.sidebar.radio("Choose data source:", 
-                              ["Use Sample Data", "Upload Your Data"])
+# Sidebar
+st.sidebar.header("📊 Configuration")
 
-if data_option == "Use Sample Data":
-    # Load sample dataset
-    from sklearn.datasets import load_iris
-    iris = load_iris()
-    X = pd.DataFrame(iris.data, columns=iris.feature_names)
-    y = pd.Series(iris.target, name='target')
-    target_names = iris.target_names
+# Stock selection
+ticker = st.sidebar.text_input("Enter Stock Ticker", "AAPL").upper()
+start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2020-01-01"))
+end_date = st.sidebar.date_input("End Date", pd.to_datetime("2023-12-31"))
+
+# Model selection
+model_choice = st.sidebar.selectbox(
+    "Select ML Model",
+    ["Random Forest", "Gradient Boosting", "SVM", "LSTM", "Prophet", "Ensemble"]
+)
+
+# Parameters
+lookback_days = st.sidebar.slider("Lookback Days", 5, 60, 30)
+forecast_days = st.sidebar.slider("Forecast Days", 1, 30, 7)
+
+@st.cache_data
+def load_stock_data(ticker, start, end):
+    """Load stock data from Yahoo Finance"""
+    try:
+        data = yf.download(ticker, start=start, end=end)
+        if data.empty:
+            st.error(f"No data found for ticker {ticker}")
+            return None
+        return data
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return None
+
+@st.cache_data
+def calculate_technical_indicators(df):
+    """Calculate technical indicators"""
+    # Price-based indicators
+    df['SMA_20'] = talib.SMA(df['Close'], timeperiod=20)
+    df['EMA_20'] = talib.EMA(df['Close'], timeperiod=20)
+    df['RSI'] = talib.RSI(df['Close'], timeperiod=14)
+    df['MACD'], df['MACD_signal'], df['MACD_hist'] = talib.MACD(df['Close'])
     
-    st.subheader("Sample Iris Dataset")
-    st.write("**Features:**", list(X.columns))
-    st.write("**Target classes:**", list(target_names))
-    st.dataframe(pd.concat([X, y], axis=1).head())
+    # Bollinger Bands
+    df['BB_upper'], df['BB_middle'], df['BB_lower'] = talib.BBANDS(df['Close'], timeperiod=20)
     
-else:
-    uploaded_file = st.sidebar.file_uploader("Upload CSV file", type="csv")
-    if uploaded_file is not None:
-        data = pd.read_csv(uploaded_file)
-        st.subheader("Uploaded Data")
-        st.dataframe(data.head())
+    # Volume indicators
+    df['Volume_SMA'] = talib.SMA(df['Volume'], timeperiod=20)
+    
+    # Price trends
+    df['Price_Rate_Of_Change'] = talib.ROC(df['Close'], timeperiod=10)
+    df['Momentum'] = talib.MOM(df['Close'], timeperiod=10)
+    
+    return df
+
+def create_features(df, lookback=30):
+    """Create features for machine learning"""
+    df = df.copy()
+    
+    # Price features
+    df['Price_Lag_1'] = df['Close'].shift(1)
+    df['Price_Lag_5'] = df['Close'].shift(5)
+    df['Price_Lag_10'] = df['Close'].shift(10)
+    
+    # Rolling statistics
+    df['Rolling_Mean_7'] = df['Close'].rolling(window=7).mean()
+    df['Rolling_Std_7'] = df['Close'].rolling(window=7).std()
+    df['Rolling_Mean_21'] = df['Close'].rolling(window=21).mean()
+    df['Rolling_Std_21'] = df['Close'].rolling(window=21).std()
+    
+    # Volatility
+    df['Volatility'] = df['Close'].rolling(window=21).std()
+    
+    # Price change features
+    df['Daily_Return'] = df['Close'].pct_change()
+    df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
+    
+    # Drop NaN values
+    df = df.dropna()
+    
+    return df
+
+def prepare_ml_data(df, lookback=30, forecast_days=1):
+    """Prepare data for machine learning"""
+    features = ['Open', 'High', 'Low', 'Close', 'Volume', 'SMA_20', 'EMA_20', 
+                'RSI', 'MACD', 'MACD_signal', 'BB_upper', 'BB_lower',
+                'Volume_SMA', 'Price_Rate_Of_Change', 'Momentum',
+                'Price_Lag_1', 'Price_Lag_5', 'Price_Lag_10',
+                'Rolling_Mean_7', 'Rolling_Std_7', 'Rolling_Mean_21', 'Rolling_Std_21',
+                'Volatility', 'Daily_Return', 'Price_Range']
+    
+    # Select available features
+    available_features = [f for f in features if f in df.columns]
+    X = df[available_features]
+    
+    # Create target (future price)
+    y = df['Close'].shift(-forecast_days)
+    
+    # Remove rows with NaN in target
+    valid_indices = ~y.isna()
+    X = X[valid_indices]
+    y = y[valid_indices]
+    
+    return X, y, available_features
+
+def train_model(X, y, model_type):
+    """Train the selected machine learning model"""
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+    
+    # Scale features
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    
+    # Initialize model
+    if model_type == "Random Forest":
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
+    elif model_type == "Gradient Boosting":
+        model = GradientBoostingRegressor(n_estimators=100, random_state=42)
+    elif model_type == "SVM":
+        model = SVR(kernel='rbf', C=1.0)
+    else:  # Default to Random Forest
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
+    
+    # Train model
+    model.fit(X_train_scaled, y_train)
+    
+    # Make predictions
+    y_pred = model.predict(X_test_scaled)
+    
+    return model, scaler, X_test, y_test, y_pred
+
+def calculate_metrics(y_true, y_pred):
+    """Calculate prediction metrics"""
+    mae = mean_absolute_error(y_true, y_pred)
+    mse = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+    r2 = r2_score(y_true, y_pred)
+    
+    # Direction accuracy
+    direction_true = np.diff(y_true) > 0
+    direction_pred = np.diff(y_pred) > 0
+    direction_accuracy = np.mean(direction_true == direction_pred)
+    
+    return {
+        'MAE': mae,
+        'MSE': mse,
+        'RMSE': rmse,
+        'R2 Score': r2,
+        'Direction Accuracy': direction_accuracy
+    }
+
+def create_interactive_chart(df, predictions=None):
+    """Create interactive Plotly chart"""
+    fig = make_subplots(
+        rows=2, cols=1,
+        subplot_titles=('Price Chart with Technical Indicators', 'Volume & RSI'),
+        vertical_spacing=0.08,
+        row_heights=[0.7, 0.3]
+    )
+    
+    # Price data
+    fig.add_trace(
+        go.Candlestick(
+            x=df.index,
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
+            name='Price'
+        ),
+        row=1, col=1
+    )
+    
+    # Add moving averages
+    if 'SMA_20' in df.columns:
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df['SMA_20'], name='SMA 20', line=dict(color='orange')),
+            row=1, col=1
+        )
+    
+    if 'EMA_20' in df.columns:
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df['EMA_20'], name='EMA 20', line=dict(color='red')),
+            row=1, col=1
+        )
+    
+    # Add Bollinger Bands
+    if all(col in df.columns for col in ['BB_upper', 'BB_lower']):
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df['BB_upper'], name='BB Upper', line=dict(color='gray', dash='dash')),
+            row=1, col=1
+        )
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df['BB_lower'], name='BB Lower', line=dict(color='gray', dash='dash')),
+            row=1, col=1
+        )
+    
+    # Volume
+    colors = ['red' if row['Open'] > row['Close'] else 'green' for _, row in df.iterrows()]
+    fig.add_trace(
+        go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color=colors),
+        row=2, col=1
+    )
+    
+    # RSI
+    if 'RSI' in df.columns:
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df['RSI'], name='RSI', line=dict(color='purple')),
+            row=2, col=1
+        )
+        # Add RSI reference lines
+        fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+    
+    fig.update_layout(
+        height=800,
+        showlegend=True,
+        xaxis_rangeslider_visible=False
+    )
+    
+    return fig
+
+# Main app logic
+def main():
+    # Load data
+    with st.spinner('Loading stock data...'):
+        data = load_stock_data(ticker, start_date, end_date)
+    
+    if data is None:
+        st.error("Failed to load data. Please check the ticker symbol and dates.")
+        return
+    
+    # Calculate technical indicators
+    with st.spinner('Calculating technical indicators...'):
+        data = calculate_technical_indicators(data)
+    
+    # Display basic info
+    col1, col2, col3, col4 = st.columns(4)
+    
+    current_price = data['Close'].iloc[-1]
+    prev_price = data['Close'].iloc[-2]
+    price_change = current_price - prev_price
+    price_change_pct = (price_change / prev_price) * 100
+    
+    with col1:
+        st.metric("Current Price", f"${current_price:.2f}")
+    with col2:
+        st.metric("Daily Change", f"${price_change:.2f}", f"{price_change_pct:.2f}%")
+    with col3:
+        st.metric("52W High", f"${data['High'].max():.2f}")
+    with col4:
+        st.metric("52W Low", f"${data['Low'].min():.2f}")
+    
+    # Display interactive chart
+    st.plotly_chart(create_interactive_chart(data), use_container_width=True)
+    
+    # Machine Learning Prediction Section
+    st.header("🤖 Machine Learning Predictions")
+    
+    # Prepare data for ML
+    with st.spinner('Preparing data for machine learning...'):
+        data_ml = create_features(data, lookback_days)
+        X, y, feature_names = prepare_ml_data(data_ml, lookback_days, forecast_days)
+    
+    if len(X) == 0:
+        st.error("Not enough data for machine learning. Try increasing the date range.")
+        return
+    
+    # Train model and get predictions
+    with st.spinner(f'Training {model_choice} model...'):
+        model, scaler, X_test, y_test, y_pred = train_model(X, y, model_choice)
+    
+    # Calculate metrics
+    metrics = calculate_metrics(y_test, y_pred)
+    
+    # Display metrics
+    st.subheader("📊 Model Performance")
+    metric_cols = st.columns(5)
+    with metric_cols[0]:
+        st.metric("MAE", f"${metrics['MAE']:.2f}")
+    with metric_cols[1]:
+        st.metric("RMSE", f"${metrics['RMSE']:.2f}")
+    with metric_cols[2]:
+        st.metric("R² Score", f"{metrics['R2 Score']:.2f}")
+    with metric_cols[3]:
+        st.metric("Direction Accuracy", f"{metrics['Direction Accuracy']:.1%}")
+    
+    # Prediction vs Actual chart
+    fig_pred = go.Figure()
+    fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_test.values, name='Actual', line=dict(color='blue')))
+    fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_pred, name='Predicted', line=dict(color='red', dash='dash')))
+    fig_pred.update_layout(title='Actual vs Predicted Prices', xaxis_title='Date', yaxis_title='Price')
+    st.plotly_chart(fig_pred, use_container_width=True)
+    
+    # Future Prediction
+    st.subheader("🔮 Future Price Prediction")
+    
+    # Use latest data for prediction
+    latest_data = X.iloc[-1:].copy()
+    latest_scaled = scaler.transform(latest_data)
+    future_prediction = model.predict(latest_scaled)[0]
+    
+    current_price = data['Close'].iloc[-1]
+    pred_change = future_prediction - current_price
+    pred_change_pct = (pred_change / current_price) * 100
+    
+    pred_col1, pred_col2, pred_col3 = st.columns(3)
+    
+    with pred_col1:
+        st.metric("Current Price", f"${current_price:.2f}")
+    with pred_col2:
+        st.metric(f"Predicted in {forecast_days} days", f"${future_prediction:.2f}")
+    with pred_col3:
+        change_color = "prediction-positive" if pred_change > 0 else "prediction-negative"
+        st.markdown(f'<div class="metric-card {change_color}">Expected Change: ${pred_change:.2f} ({pred_change_pct:.2f}%)</div>', unsafe_allow_html=True)
+    
+    # Feature Importance (for tree-based models)
+    if hasattr(model, 'feature_importances_'):
+        st.subheader("🎯 Feature Importance")
+        feature_imp = pd.DataFrame({
+            'feature': feature_names,
+            'importance': model.feature_importances_
+        }).sort_values('importance', ascending=True)
         
-        # Let user select features and target
-        features = st.multiselect("Select features", data.columns)
-        target = st.selectbox("Select target variable", data.columns)
-        
-        if features and target:
-            X = data[features]
-            y = data[target]
-            target_names = y.unique()
-    else:
-        st.info("Please upload a CSV file or use sample data")
-        st.stop()
+        fig_imp = go.Figure(go.Bar(
+            x=feature_imp['importance'],
+            y=feature_imp['feature'],
+            orientation='h'
+        ))
+        fig_imp.update_layout(title='Feature Importance', xaxis_title='Importance')
+        st.plotly_chart(fig_imp, use_container_width=True)
+    
+    # Trading Suggestions
+    st.subheader("💡 Trading Suggestions")
+    
+    # Simple trading logic based on predictions and technical indicators
+    suggestion = "HOLD"
+    confidence = "Medium"
+    
+    if pred_change_pct > 2:
+        suggestion = "BUY"
+        confidence = "High" if metrics['Direction Accuracy'] > 0.7 else "Medium"
+    elif pred_change_pct < -2:
+        suggestion = "SELL"
+        confidence = "High" if metrics['Direction Accuracy'] > 0.7 else "Medium"
+    
+    # Check RSI for overbought/oversold
+    if 'RSI' in data.columns:
+        current_rsi = data['RSI'].iloc[-1]
+        if current_rsi > 70:
+            suggestion = "SELL (Overbought)"
+        elif current_rsi < 30:
+            suggestion = "BUY (Oversold)"
+    
+    sug_col1, sug_col2 = st.columns(2)
+    with sug_col1:
+        st.info(f"**Action:** {suggestion}")
+    with sug_col2:
+        st.info(f"**Confidence:** {confidence}")
+    
+    # Risk Disclaimer
+    st.warning("""
+    **⚠️ Risk Disclaimer:** 
+    This is for educational purposes only. Stock predictions are inherently uncertain. 
+    Always do your own research and consult with financial advisors before making investment decisions.
+    Past performance is not indicative of future results.
+    """)
 
-# Model configuration
-st.sidebar.header("2. Model Configuration")
-test_size = st.sidebar.slider("Test Size", 0.1, 0.5, 0.2, 0.05)
-n_estimators = st.sidebar.slider("Number of Trees", 10, 200, 100)
-
-if st.sidebar.button("🚀 Train Model"):
-    if 'X' in locals() and 'y' in locals():
-        with st.spinner("Training model..."):
-            # Split data
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=test_size, random_state=42
-            )
-            
-            # Train model
-            model = RandomForestClassifier(
-                n_estimators=n_estimators, 
-                random_state=42
-            )
-            model.fit(X_train, y_train)
-            
-            # Make predictions
-            y_pred = model.predict(X_test)
-            accuracy = accuracy_score(y_test, y_pred)
-            
-            # Display results
-            st.success(f"✅ Model trained successfully!")
-            st.metric("Accuracy", f"{accuracy:.2%}")
-            
-            # Feature importance
-            st.subheader("📊 Feature Importance")
-            feature_imp = pd.DataFrame({
-                'feature': X.columns,
-                'importance': model.feature_importances_
-            }).sort_values('importance', ascending=True)
-            
-            fig, ax = plt.subplots()
-            ax.barh(feature_imp['feature'], feature_imp['importance'])
-            ax.set_xlabel('Importance')
-            st.pyplot(fig)
-            
-            # Prediction interface
-            st.subheader("🔮 Make Predictions")
-            st.write("Enter feature values for prediction:")
-            
-            col1, col2 = st.columns(2)
-            input_features = {}
-            
-            for i, feature in enumerate(X.columns):
-                with col1 if i % 2 == 0 else col2:
-                    input_features[feature] = st.number_input(
-                        f"{feature}",
-                        value=float(X[feature].mean()),
-                        step=0.1
-                    )
-            
-            if st.button("Predict"):
-                input_array = np.array([list(input_features.values())])
-                prediction = model.predict(input_array)[0]
-                proba = model.predict_proba(input_array)[0]
-                
-                if 'target_names' in locals():
-                    predicted_class = target_names[prediction]
-                    st.success(f"Predicted class: **{predicted_class}**")
-                else:
-                    st.success(f"Predicted value: **{prediction}**")
-                
-                # Show probabilities
-                st.write("Prediction probabilities:")
-                for i, prob in enumerate(proba):
-                    class_name = target_names[i] if 'target_names' in locals() else f"Class {i}"
-                    st.write(f"{class_name}: {prob:.2%}")
-
-else:
-    st.info("👈 Configure your model in the sidebar and click 'Train Model'")
-
-# Instructions
-st.sidebar.header("ℹ️ Instructions")
-st.sidebar.info("""
-1. Choose data source
-2. Configure model parameters
-3. Click 'Train Model'
-4. View results & make predictions
-""")
+if __name__ == "__main__":
+    main()
