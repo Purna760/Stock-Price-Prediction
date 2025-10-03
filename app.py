@@ -119,19 +119,38 @@ def calculate_price_roc(prices, window=10):
         return pd.Series([np.nan] * len(prices), index=prices.index)
 
 @st.cache_data
-def load_stock_data(ticker, start, end):
-    """Load stock data from Yahoo Finance"""
+def load_stock_data(_ticker, _start_date, _end_date):
+    """Load stock data from Yahoo Finance with proper date handling"""
     try:
-        data = yf.download(ticker, start=start, end=end)
+        # Convert dates to string format for yfinance
+        start_str = _start_date.strftime("%Y-%m-%d")
+        end_str = _end_date.strftime("%Y-%m-%d")
+        
+        st.info(f"📥 Downloading data for {_ticker} from {start_str} to {end_str}")
+        
+        # Download data
+        data = yf.download(_ticker, start=start_str, end=end_str, progress=False)
+        
         if data.empty:
-            st.error(f"No data found for ticker {ticker}")
+            st.error(f"❌ No data found for ticker {_ticker}")
             return None
+            
+        # Check if we have sufficient data
+        if len(data) < 30:
+            st.warning(f"⚠️ Limited data available ({len(data)} days). Try a longer date range.")
+            
         # Ensure we have numeric data
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-            data[col] = pd.to_numeric(data[col], errors='coerce')
+            if col in data.columns:
+                data[col] = pd.to_numeric(data[col], errors='coerce')
+                
+        # Remove any rows with NaN in essential columns
+        data = data.dropna(subset=['Open', 'High', 'Low', 'Close'])
+        
         return data
+        
     except Exception as e:
-        st.error(f"Error loading data: {e}")
+        st.error(f"❌ Error loading data: {str(e)}")
         return None
 
 @st.cache_data
@@ -380,12 +399,26 @@ def main():
         
         if data is None or data.empty:
             st.error("❌ Failed to load data. Please check:")
-            st.error("- Ticker symbol (e.g., AAPL, TSLA, GOOGL)")
-            st.error("- Date range")
-            st.error("- Internet connection")
+            st.error("1. Ticker symbol (e.g., AAPL, TSLA, GOOGL, MSFT, AMZN)")
+            st.error("2. Date range (avoid very recent dates)")
+            st.error("3. Try popular stocks first")
+            
+            # Show popular tickers
+            st.info("💡 **Popular Tickers to Try:**")
+            popular_tickers = ["AAPL", "TSLA", "GOOGL", "MSFT", "AMZN", "META", "NVDA", "NFLX"]
+            cols = st.columns(4)
+            for i, tick in enumerate(popular_tickers):
+                with cols[i % 4]:
+                    if st.button(tick):
+                        st.experimental_set_query_params(ticker=tick)
+                        st.experimental_rerun()
             return
         
-        st.success(f"✅ Successfully loaded data for {ticker}")
+        st.success(f"✅ Successfully loaded {len(data)} days of data for {ticker}")
+        
+        # Show data preview
+        with st.expander("📋 Data Preview"):
+            st.dataframe(data.tail(10))
         
         # Calculate technical indicators
         with st.spinner('Calculating technical indicators...'):
