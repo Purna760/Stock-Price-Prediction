@@ -42,6 +42,10 @@ st.markdown("""
         color: red;
         font-weight: bold;
     }
+    .ticker-button {
+        width: 100%;
+        margin: 5px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -51,8 +55,10 @@ st.markdown('<h1 class="main-header">🚀 Advanced Stock Price Predictor</h1>', 
 # Sidebar
 st.sidebar.header("📊 Configuration")
 
-# Stock selection
+# Stock selection with default value
 ticker = st.sidebar.text_input("Enter Stock Ticker", "AAPL").upper()
+
+# Use fixed date range to avoid issues
 start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2020-01-01"))
 end_date = st.sidebar.date_input("End Date", pd.to_datetime("2023-12-31"))
 
@@ -118,40 +124,43 @@ def calculate_price_roc(prices, window=10):
     except:
         return pd.Series([np.nan] * len(prices), index=prices.index)
 
-@st.cache_data
-def load_stock_data(_ticker, _start_date, _end_date):
-    """Load stock data from Yahoo Finance with proper date handling"""
+def load_stock_data_simple(ticker_symbol):
+    """Simple and robust stock data loading"""
     try:
-        # Convert dates to string format for yfinance
-        start_str = _start_date.strftime("%Y-%m-%d")
-        end_str = _end_date.strftime("%Y-%m-%d")
+        # Create ticker object
+        stock = yf.Ticker(ticker_symbol)
         
-        st.info(f"📥 Downloading data for {_ticker} from {start_str} to {end_str}")
-        
-        # Download data
-        data = yf.download(_ticker, start=start_str, end=end_str, progress=False)
+        # Get historical data for max period
+        data = stock.history(period="max")
         
         if data.empty:
-            st.error(f"❌ No data found for ticker {_ticker}")
-            return None
+            return None, f"No data found for {ticker_symbol}"
             
-        # Check if we have sufficient data
-        if len(data) < 30:
-            st.warning(f"⚠️ Limited data available ({len(data)} days). Try a longer date range.")
+        # Filter for our date range
+        mask = (data.index >= pd.Timestamp('2020-01-01')) & (data.index <= pd.Timestamp('2023-12-31'))
+        data = data.loc[mask]
+        
+        if data.empty:
+            return None, f"No data in date range for {ticker_symbol}"
             
-        # Ensure we have numeric data
-        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+        # Ensure numeric columns
+        numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        for col in numeric_cols:
             if col in data.columns:
                 data[col] = pd.to_numeric(data[col], errors='coerce')
-                
+        
         # Remove any rows with NaN in essential columns
         data = data.dropna(subset=['Open', 'High', 'Low', 'Close'])
         
-        return data
+        return data, "Success"
         
     except Exception as e:
-        st.error(f"❌ Error loading data: {str(e)}")
-        return None
+        return None, f"Error: {str(e)}"
+
+@st.cache_data
+def load_stock_data(_ticker):
+    """Cached version of stock data loading"""
+    return load_stock_data_simple(_ticker)
 
 @st.cache_data
 def calculate_technical_indicators(df):
@@ -162,7 +171,6 @@ def calculate_technical_indicators(df):
         # Ensure we have required columns
         required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
         if not all(col in df.columns for col in required_cols):
-            st.error("Missing required price data columns")
             return df
         
         # Price-based indicators
@@ -185,7 +193,6 @@ def calculate_technical_indicators(df):
         
         return df
     except Exception as e:
-        st.error(f"Error calculating technical indicators: {e}")
         return df
 
 def create_features(df, lookback=30):
@@ -220,7 +227,6 @@ def create_features(df, lookback=30):
         
         return df
     except Exception as e:
-        st.error(f"Error creating features: {e}")
         return df
 
 def prepare_ml_data(df, lookback=30, forecast_days=1):
@@ -251,7 +257,6 @@ def prepare_ml_data(df, lookback=30, forecast_days=1):
         
         return X, y, available_features
     except Exception as e:
-        st.error(f"Error preparing ML data: {e}")
         return pd.DataFrame(), pd.Series(), []
 
 def train_model(X, y, model_type):
@@ -285,7 +290,6 @@ def train_model(X, y, model_type):
         
         return model, scaler, X_test, y_test, y_pred
     except Exception as e:
-        st.error(f"Error training model: {e}")
         return None, None, None, None, None
 
 def calculate_metrics(y_true, y_pred):
@@ -321,20 +325,18 @@ def create_interactive_chart(df):
     try:
         fig = make_subplots(
             rows=2, cols=1,
-            subplot_titles=('Price Chart with Technical Indicators', 'Volume & RSI'),
-            vertical_spacing=0.08,
+            subplot_titles=('Price Chart', 'Volume'),
+            vertical_spacing=0.1,
             row_heights=[0.7, 0.3]
         )
         
-        # Price data
+        # Price data - use line chart instead of candlestick for simplicity
         fig.add_trace(
-            go.Candlestick(
+            go.Scatter(
                 x=df.index,
-                open=df['Open'],
-                high=df['High'],
-                low=df['Low'],
-                close=df['Close'],
-                name='Price'
+                y=df['Close'],
+                name='Close Price',
+                line=dict(color='blue')
             ),
             row=1, col=1
         )
@@ -346,28 +348,12 @@ def create_interactive_chart(df):
                 row=1, col=1
             )
         
-        if 'EMA_20' in df.columns and not df['EMA_20'].isna().all():
-            fig.add_trace(
-                go.Scatter(x=df.index, y=df['EMA_20'], name='EMA 20', line=dict(color='red')),
-                row=1, col=1
-            )
-        
         # Volume
         colors = ['red' if row['Open'] - row['Close'] >= 0 else 'green' for _, row in df.iterrows()]
         fig.add_trace(
             go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color=colors),
             row=2, col=1
         )
-        
-        # RSI if available
-        if 'RSI' in df.columns and not df['RSI'].isna().all():
-            fig.add_trace(
-                go.Scatter(x=df.index, y=df['RSI'], name='RSI', line=dict(color='purple')),
-                row=2, col=1
-            )
-            # Add RSI reference lines
-            fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
-            fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
         
         fig.update_layout(
             height=600,
@@ -377,7 +363,6 @@ def create_interactive_chart(df):
         
         return fig
     except Exception as e:
-        st.error(f"Error creating chart: {e}")
         return go.Figure()
 
 def safe_metric_display(metric_name, value, format_str="${:.2f}"):
@@ -392,32 +377,46 @@ def safe_metric_display(metric_name, value, format_str="${:.2f}"):
 
 # Main app logic
 def main():
+    # Quick test buttons
+    st.sidebar.header("🚀 Quick Test")
+    popular_tickers = ["AAPL", "TSLA", "GOOGL", "MSFT", "AMZN", "META", "NVDA", "NFLX"]
+    
+    cols = st.sidebar.columns(2)
+    selected_ticker = ticker  # Start with the input value
+    
+    for i, tick in enumerate(popular_tickers):
+        with cols[i % 2]:
+            if st.button(tick, key=f"btn_{tick}"):
+                selected_ticker = tick
+    
+    # Use the selected ticker (either from input or button)
+    current_ticker = selected_ticker
+    
     try:
         # Load data
-        with st.spinner('Loading stock data...'):
-            data = load_stock_data(ticker, start_date, end_date)
+        with st.spinner(f'Loading data for {current_ticker}...'):
+            data, message = load_stock_data(current_ticker)
         
-        if data is None or data.empty:
-            st.error("❌ Failed to load data. Please check:")
-            st.error("1. Ticker symbol (e.g., AAPL, TSLA, GOOGL, MSFT, AMZN)")
-            st.error("2. Date range (avoid very recent dates)")
-            st.error("3. Try popular stocks first")
+        if data is None:
+            st.error(f"❌ {message}")
+            st.info("💡 **Try these popular stocks:**")
             
-            # Show popular tickers
-            st.info("💡 **Popular Tickers to Try:**")
-            popular_tickers = ["AAPL", "TSLA", "GOOGL", "MSFT", "AMZN", "META", "NVDA", "NFLX"]
-            cols = st.columns(4)
-            for i, tick in enumerate(popular_tickers):
-                with cols[i % 4]:
-                    if st.button(tick):
+            # Display popular tickers in the main area too
+            col1, col2, col3, col4 = st.columns(4)
+            all_tickers = popular_tickers
+            
+            for i, tick in enumerate(all_tickers):
+                with [col1, col2, col3, col4][i % 4]:
+                    if st.button(f"📈 {tick}", key=f"main_btn_{tick}"):
+                        # This will refresh the app with the new ticker
                         st.experimental_set_query_params(ticker=tick)
-                        st.experimental_rerun()
+                        st.rerun()
             return
         
-        st.success(f"✅ Successfully loaded {len(data)} days of data for {ticker}")
+        st.success(f"✅ Successfully loaded {len(data)} days of data for {current_ticker}")
         
         # Show data preview
-        with st.expander("📋 Data Preview"):
+        with st.expander("📋 Data Preview (Last 10 days)"):
             st.dataframe(data.tail(10))
         
         # Calculate technical indicators
@@ -451,14 +450,19 @@ def main():
             except:
                 st.metric("Daily Change", "N/A")
         with col3:
-            safe_metric_display("52W High", data['High'].max())
+            safe_metric_display("All Time High", data['High'].max())
         with col4:
-            safe_metric_display("52W Low", data['Low'].min())
+            safe_metric_display("All Time Low", data['Low'].min())
         
         # Display interactive chart
         st.subheader("📊 Price Chart")
         chart = create_interactive_chart(data)
         st.plotly_chart(chart, use_container_width=True)
+        
+        # Check if we have enough data for ML
+        if len(data) < 50:
+            st.warning("⚠️ Limited data available. ML predictions work better with more historical data.")
+            return
         
         # Machine Learning Prediction Section
         st.header("🤖 Machine Learning Predictions")
@@ -467,15 +471,13 @@ def main():
         with st.spinner('Preparing data for machine learning...'):
             data_ml = create_features(data, lookback_days)
             if data_ml.empty:
-                st.warning("⚠️ Not enough data for machine learning. Try:")
-                st.warning("- Increasing the date range")
-                st.warning("- Choosing a more popular stock")
+                st.warning("⚠️ Not enough data for machine learning after processing.")
                 return
                 
             X, y, feature_names = prepare_ml_data(data_ml, lookback_days, forecast_days)
         
-        if X.empty or y.empty:
-            st.warning("⚠️ Insufficient data for training. Try adjusting parameters.")
+        if X.empty or y.empty or len(X) < 20:
+            st.warning("⚠️ Insufficient data for training. Need at least 20 data points.")
             return
         
         # Train model and get predictions
@@ -483,7 +485,7 @@ def main():
             model, scaler, X_test, y_test, y_pred = train_model(X, y, model_choice)
             
             if model is None:
-                st.error("❌ Model training failed")
+                st.error("❌ Model training failed - not enough data")
                 return
         
         # Calculate metrics
@@ -500,14 +502,6 @@ def main():
             st.metric("R² Score", f"{metrics['R2 Score']:.4f}")
         with metric_cols[3]:
             st.metric("Direction Accuracy", f"{metrics['Direction Accuracy']:.1%}")
-        
-        # Prediction vs Actual chart
-        if len(y_test) > 0:
-            fig_pred = go.Figure()
-            fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_test.values, name='Actual', line=dict(color='blue')))
-            fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_pred, name='Predicted', line=dict(color='red', dash='dash')))
-            fig_pred.update_layout(title='Actual vs Predicted Prices', xaxis_title='Date', yaxis_title='Price')
-            st.plotly_chart(fig_pred, use_container_width=True)
         
         # Future Prediction
         st.subheader("🔮 Future Price Prediction")
@@ -526,26 +520,10 @@ def main():
             with pred_col1:
                 safe_metric_display("Current Price", current_price)
             with pred_col2:
-                safe_metric_display(f"Predicted in {forecast_days} days", future_prediction)
+                safe_metric_display(f"Predicted Price", future_prediction)
             with pred_col3:
                 change_class = "prediction-positive" if pred_change > 0 else "prediction-negative"
                 st.markdown(f'<div class="{change_class}">Expected Change: ${pred_change:.2f} ({pred_change_pct:.2f}%)</div>', unsafe_allow_html=True)
-            
-            # Feature Importance
-            if hasattr(model, 'feature_importances_'):
-                st.subheader("🎯 Feature Importance")
-                feature_imp = pd.DataFrame({
-                    'feature': feature_names,
-                    'importance': model.feature_importances_
-                }).sort_values('importance', ascending=True)
-                
-                fig_imp = go.Figure(go.Bar(
-                    x=feature_imp['importance'],
-                    y=feature_imp['feature'],
-                    orientation='h'
-                ))
-                fig_imp.update_layout(title='Feature Importance', xaxis_title='Importance')
-                st.plotly_chart(fig_imp, use_container_width=True)
             
             # Trading Suggestions
             st.subheader("💡 Trading Suggestions")
@@ -553,20 +531,21 @@ def main():
             suggestion = "HOLD"
             confidence = "Medium"
             
-            if pred_change_pct > 2:
-                suggestion = "BUY"
-                confidence = "High" if metrics['Direction Accuracy'] > 0.7 else "Medium"
-            elif pred_change_pct < -2:
-                suggestion = "SELL"
-                confidence = "High" if metrics['Direction Accuracy'] > 0.7 else "Medium"
-            
-            # Check RSI for overbought/oversold
-            if 'RSI' in data.columns and not pd.isna(data['RSI'].iloc[-1]):
-                current_rsi = data['RSI'].iloc[-1]
-                if current_rsi > 70:
-                    suggestion = "SELL (Overbought)"
-                elif current_rsi < 30:
-                    suggestion = "BUY (Oversold)"
+            if pred_change_pct > 3:
+                suggestion = "STRONG BUY 🟢"
+                confidence = "High"
+            elif pred_change_pct > 1:
+                suggestion = "BUY 🟢"
+                confidence = "Medium"
+            elif pred_change_pct < -3:
+                suggestion = "STRONG SELL 🔴"
+                confidence = "High"
+            elif pred_change_pct < -1:
+                suggestion = "SELL 🔴"
+                confidence = "Medium"
+            else:
+                suggestion = "HOLD 🟡"
+                confidence = "Low"
             
             sug_col1, sug_col2 = st.columns(2)
             with sug_col1:
@@ -579,7 +558,7 @@ def main():
         
     except Exception as e:
         st.error(f"❌ Application error: {str(e)}")
-        st.info("💡 Try refreshing the page or using a different stock ticker")
+        st.info("💡 Try clicking one of the popular stock buttons above")
     
     # Risk Disclaimer
     st.warning("""
