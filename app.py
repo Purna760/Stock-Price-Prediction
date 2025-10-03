@@ -23,7 +23,7 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        font-size: 3rem;
+        font-size: 2.5rem;
         color: #1f77b4;
         text-align: center;
         margin-bottom: 2rem;
@@ -69,37 +69,54 @@ forecast_days = st.sidebar.slider("Forecast Days", 1, 30, 7)
 # Technical Indicators without TA-Lib
 def calculate_rsi(prices, window=14):
     """Calculate Relative Strength Index (RSI)"""
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    try:
+        delta = prices.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        return rsi
+    except:
+        return pd.Series([np.nan] * len(prices), index=prices.index)
 
 def calculate_macd(prices, fast=12, slow=26, signal=9):
     """Calculate MACD"""
-    ema_fast = prices.ewm(span=fast).mean()
-    ema_slow = prices.ewm(span=slow).mean()
-    macd = ema_fast - ema_slow
-    macd_signal = macd.ewm(span=signal).mean()
-    macd_hist = macd - macd_signal
-    return macd, macd_signal, macd_hist
+    try:
+        ema_fast = prices.ewm(span=fast).mean()
+        ema_slow = prices.ewm(span=slow).mean()
+        macd = ema_fast - ema_slow
+        macd_signal = macd.ewm(span=signal).mean()
+        macd_hist = macd - macd_signal
+        return macd, macd_signal, macd_hist
+    except:
+        nan_series = pd.Series([np.nan] * len(prices), index=prices.index)
+        return nan_series, nan_series, nan_series
 
 def calculate_bollinger_bands(prices, window=20, num_std=2):
     """Calculate Bollinger Bands"""
-    rolling_mean = prices.rolling(window=window).mean()
-    rolling_std = prices.rolling(window=window).std()
-    upper_band = rolling_mean + (rolling_std * num_std)
-    lower_band = rolling_mean - (rolling_std * num_std)
-    return upper_band, rolling_mean, lower_band
+    try:
+        rolling_mean = prices.rolling(window=window).mean()
+        rolling_std = prices.rolling(window=window).std()
+        upper_band = rolling_mean + (rolling_std * num_std)
+        lower_band = rolling_mean - (rolling_std * num_std)
+        return upper_band, rolling_mean, lower_band
+    except:
+        nan_series = pd.Series([np.nan] * len(prices), index=prices.index)
+        return nan_series, nan_series, nan_series
 
 def calculate_momentum(prices, window=10):
     """Calculate Price Momentum"""
-    return prices.diff(window)
+    try:
+        return prices.diff(window)
+    except:
+        return pd.Series([np.nan] * len(prices), index=prices.index)
 
 def calculate_price_roc(prices, window=10):
     """Calculate Price Rate of Change"""
-    return ((prices - prices.shift(window)) / prices.shift(window)) * 100
+    try:
+        return ((prices - prices.shift(window)) / prices.shift(window)) * 100
+    except:
+        return pd.Series([np.nan] * len(prices), index=prices.index)
 
 @st.cache_data
 def load_stock_data(ticker, start, end):
@@ -109,6 +126,9 @@ def load_stock_data(ticker, start, end):
         if data.empty:
             st.error(f"No data found for ticker {ticker}")
             return None
+        # Ensure we have numeric data
+        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+            data[col] = pd.to_numeric(data[col], errors='coerce')
         return data
     except Exception as e:
         st.error(f"Error loading data: {e}")
@@ -117,371 +137,416 @@ def load_stock_data(ticker, start, end):
 @st.cache_data
 def calculate_technical_indicators(df):
     """Calculate technical indicators without TA-Lib"""
-    df = df.copy()
-    
-    # Price-based indicators
-    df['SMA_20'] = df['Close'].rolling(window=20).mean()
-    df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
-    df['RSI'] = calculate_rsi(df['Close'], 14)
-    
-    # MACD
-    df['MACD'], df['MACD_signal'], df['MACD_hist'] = calculate_macd(df['Close'])
-    
-    # Bollinger Bands
-    df['BB_upper'], df['BB_middle'], df['BB_lower'] = calculate_bollinger_bands(df['Close'])
-    
-    # Volume indicators
-    df['Volume_SMA'] = df['Volume'].rolling(window=20).mean()
-    
-    # Price trends
-    df['Price_Rate_Of_Change'] = calculate_price_roc(df['Close'], 10)
-    df['Momentum'] = calculate_momentum(df['Close'], 10)
-    
-    return df
+    try:
+        df = df.copy()
+        
+        # Ensure we have required columns
+        required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        if not all(col in df.columns for col in required_cols):
+            st.error("Missing required price data columns")
+            return df
+        
+        # Price-based indicators
+        df['SMA_20'] = df['Close'].rolling(window=20).mean()
+        df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
+        df['RSI'] = calculate_rsi(df['Close'], 14)
+        
+        # MACD
+        df['MACD'], df['MACD_signal'], df['MACD_hist'] = calculate_macd(df['Close'])
+        
+        # Bollinger Bands
+        df['BB_upper'], df['BB_middle'], df['BB_lower'] = calculate_bollinger_bands(df['Close'])
+        
+        # Volume indicators
+        df['Volume_SMA'] = df['Volume'].rolling(window=20).mean()
+        
+        # Price trends
+        df['Price_Rate_Of_Change'] = calculate_price_roc(df['Close'], 10)
+        df['Momentum'] = calculate_momentum(df['Close'], 10)
+        
+        return df
+    except Exception as e:
+        st.error(f"Error calculating technical indicators: {e}")
+        return df
 
 def create_features(df, lookback=30):
     """Create features for machine learning"""
-    df = df.copy()
-    
-    # Price features
-    df['Price_Lag_1'] = df['Close'].shift(1)
-    df['Price_Lag_5'] = df['Close'].shift(5)
-    df['Price_Lag_10'] = df['Close'].shift(10)
-    
-    # Rolling statistics
-    df['Rolling_Mean_7'] = df['Close'].rolling(window=7).mean()
-    df['Rolling_Std_7'] = df['Close'].rolling(window=7).std()
-    df['Rolling_Mean_21'] = df['Close'].rolling(window=21).mean()
-    df['Rolling_Std_21'] = df['Close'].rolling(window=21).std()
-    
-    # Volatility
-    df['Volatility'] = df['Close'].rolling(window=21).std()
-    
-    # Price change features
-    df['Daily_Return'] = df['Close'].pct_change()
-    df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
-    
-    # Additional technical features
-    df['High_Low_Ratio'] = df['High'] / df['Low']
-    df['Open_Close_Ratio'] = df['Open'] / df['Close']
-    
-    # Drop NaN values
-    df = df.dropna()
-    
-    return df
+    try:
+        df = df.copy()
+        
+        # Price features
+        df['Price_Lag_1'] = df['Close'].shift(1)
+        df['Price_Lag_5'] = df['Close'].shift(5)
+        df['Price_Lag_10'] = df['Close'].shift(10)
+        
+        # Rolling statistics
+        df['Rolling_Mean_7'] = df['Close'].rolling(window=7).mean()
+        df['Rolling_Std_7'] = df['Close'].rolling(window=7).std()
+        df['Rolling_Mean_21'] = df['Close'].rolling(window=21).mean()
+        df['Rolling_Std_21'] = df['Close'].rolling(window=21).std()
+        
+        # Volatility
+        df['Volatility'] = df['Close'].rolling(window=21).std()
+        
+        # Price change features
+        df['Daily_Return'] = df['Close'].pct_change()
+        df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
+        
+        # Additional technical features
+        df['High_Low_Ratio'] = df['High'] / df['Low']
+        df['Open_Close_Ratio'] = df['Open'] / df['Close']
+        
+        # Drop NaN values
+        df = df.dropna()
+        
+        return df
+    except Exception as e:
+        st.error(f"Error creating features: {e}")
+        return df
 
 def prepare_ml_data(df, lookback=30, forecast_days=1):
     """Prepare data for machine learning"""
-    features = ['Open', 'High', 'Low', 'Close', 'Volume', 'SMA_20', 'EMA_20', 
-                'RSI', 'MACD', 'MACD_signal', 'BB_upper', 'BB_lower',
-                'Volume_SMA', 'Price_Rate_Of_Change', 'Momentum',
-                'Price_Lag_1', 'Price_Lag_5', 'Price_Lag_10',
-                'Rolling_Mean_7', 'Rolling_Std_7', 'Rolling_Mean_21', 'Rolling_Std_21',
-                'Volatility', 'Daily_Return', 'Price_Range',
-                'High_Low_Ratio', 'Open_Close_Ratio']
-    
-    # Select available features
-    available_features = [f for f in features if f in df.columns]
-    X = df[available_features]
-    
-    # Create target (future price)
-    y = df['Close'].shift(-forecast_days)
-    
-    # Remove rows with NaN in target
-    valid_indices = ~y.isna()
-    X = X[valid_indices]
-    y = y[valid_indices]
-    
-    return X, y, available_features
+    try:
+        features = ['Open', 'High', 'Low', 'Close', 'Volume', 'SMA_20', 'EMA_20', 
+                    'RSI', 'MACD', 'MACD_signal', 'BB_upper', 'BB_lower',
+                    'Volume_SMA', 'Price_Rate_Of_Change', 'Momentum',
+                    'Price_Lag_1', 'Price_Lag_5', 'Price_Lag_10',
+                    'Rolling_Mean_7', 'Rolling_Std_7', 'Rolling_Mean_21', 'Rolling_Std_21',
+                    'Volatility', 'Daily_Return', 'Price_Range',
+                    'High_Low_Ratio', 'Open_Close_Ratio']
+        
+        # Select available features
+        available_features = [f for f in features if f in df.columns]
+        if not available_features:
+            return pd.DataFrame(), pd.Series(), []
+            
+        X = df[available_features]
+        
+        # Create target (future price)
+        y = df['Close'].shift(-forecast_days)
+        
+        # Remove rows with NaN in target
+        valid_indices = ~y.isna()
+        X = X[valid_indices]
+        y = y[valid_indices]
+        
+        return X, y, available_features
+    except Exception as e:
+        st.error(f"Error preparing ML data: {e}")
+        return pd.DataFrame(), pd.Series(), []
 
 def train_model(X, y, model_type):
     """Train the selected machine learning model"""
-    # Split data
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-    
-    # Scale features
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-    
-    # Initialize model
-    if model_type == "Random Forest":
-        model = RandomForestRegressor(n_estimators=100, random_state=42, max_depth=10)
-    elif model_type == "Gradient Boosting":
-        model = GradientBoostingRegressor(n_estimators=100, random_state=42, max_depth=5)
-    elif model_type == "SVM":
-        model = SVR(kernel='rbf', C=1.0)
-    elif model_type == "Ensemble":
-        # Simple ensemble of multiple models
-        rf = RandomForestRegressor(n_estimators=50, random_state=42, max_depth=10)
-        gb = GradientBoostingRegressor(n_estimators=50, random_state=42, max_depth=5)
+    try:
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
         
-        # For simplicity, we'll use Random Forest as ensemble
-        model = RandomForestRegressor(n_estimators=100, random_state=42, max_depth=10)
-    else:  # Default to Random Forest
-        model = RandomForestRegressor(n_estimators=100, random_state=42, max_depth=10)
-    
-    # Train model
-    model.fit(X_train_scaled, y_train)
-    
-    # Make predictions
-    y_pred = model.predict(X_test_scaled)
-    
-    return model, scaler, X_test, y_test, y_pred
+        # Scale features
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+        
+        # Initialize model
+        if model_type == "Random Forest":
+            model = RandomForestRegressor(n_estimators=100, random_state=42, max_depth=10)
+        elif model_type == "Gradient Boosting":
+            model = GradientBoostingRegressor(n_estimators=100, random_state=42, max_depth=5)
+        elif model_type == "SVM":
+            model = SVR(kernel='rbf', C=1.0)
+        elif model_type == "Ensemble":
+            model = RandomForestRegressor(n_estimators=100, random_state=42, max_depth=10)
+        else:
+            model = RandomForestRegressor(n_estimators=100, random_state=42, max_depth=10)
+        
+        # Train model
+        model.fit(X_train_scaled, y_train)
+        
+        # Make predictions
+        y_pred = model.predict(X_test_scaled)
+        
+        return model, scaler, X_test, y_test, y_pred
+    except Exception as e:
+        st.error(f"Error training model: {e}")
+        return None, None, None, None, None
 
 def calculate_metrics(y_true, y_pred):
     """Calculate prediction metrics"""
-    mae = mean_absolute_error(y_true, y_pred)
-    mse = mean_squared_error(y_true, y_pred)
-    rmse = np.sqrt(mse)
-    r2 = r2_score(y_true, y_pred)
-    
-    # Direction accuracy
-    if len(y_true) > 1:
-        direction_true = np.diff(y_true) > 0
-        direction_pred = np.diff(y_pred) > 0
-        direction_accuracy = np.mean(direction_true == direction_pred)
-    else:
-        direction_accuracy = 0
-    
-    return {
-        'MAE': mae,
-        'MSE': mse,
-        'RMSE': rmse,
-        'R2 Score': r2,
-        'Direction Accuracy': direction_accuracy
-    }
+    try:
+        mae = mean_absolute_error(y_true, y_pred)
+        mse = mean_squared_error(y_true, y_pred)
+        rmse = np.sqrt(mse)
+        r2 = r2_score(y_true, y_pred)
+        
+        # Direction accuracy
+        if len(y_true) > 1:
+            direction_true = np.diff(y_true) > 0
+            direction_pred = np.diff(y_pred) > 0
+            direction_accuracy = np.mean(direction_true == direction_pred)
+        else:
+            direction_accuracy = 0
+        
+        return {
+            'MAE': mae,
+            'MSE': mse,
+            'RMSE': rmse,
+            'R2 Score': r2,
+            'Direction Accuracy': direction_accuracy
+        }
+    except:
+        return {
+            'MAE': 0, 'MSE': 0, 'RMSE': 0, 'R2 Score': 0, 'Direction Accuracy': 0
+        }
 
-def create_interactive_chart(df, predictions=None):
+def create_interactive_chart(df):
     """Create interactive Plotly chart"""
-    fig = make_subplots(
-        rows=2, cols=1,
-        subplot_titles=('Price Chart with Technical Indicators', 'Volume & RSI'),
-        vertical_spacing=0.08,
-        row_heights=[0.7, 0.3]
-    )
-    
-    # Price data
-    fig.add_trace(
-        go.Candlestick(
-            x=df.index,
-            open=df['Open'],
-            high=df['High'],
-            low=df['Low'],
-            close=df['Close'],
-            name='Price'
-        ),
-        row=1, col=1
-    )
-    
-    # Add moving averages
-    if 'SMA_20' in df.columns:
+    try:
+        fig = make_subplots(
+            rows=2, cols=1,
+            subplot_titles=('Price Chart with Technical Indicators', 'Volume & RSI'),
+            vertical_spacing=0.08,
+            row_heights=[0.7, 0.3]
+        )
+        
+        # Price data
         fig.add_trace(
-            go.Scatter(x=df.index, y=df['SMA_20'], name='SMA 20', line=dict(color='orange')),
+            go.Candlestick(
+                x=df.index,
+                open=df['Open'],
+                high=df['High'],
+                low=df['Low'],
+                close=df['Close'],
+                name='Price'
+            ),
             row=1, col=1
         )
-    
-    if 'EMA_20' in df.columns:
+        
+        # Add moving averages if available
+        if 'SMA_20' in df.columns and not df['SMA_20'].isna().all():
+            fig.add_trace(
+                go.Scatter(x=df.index, y=df['SMA_20'], name='SMA 20', line=dict(color='orange')),
+                row=1, col=1
+            )
+        
+        if 'EMA_20' in df.columns and not df['EMA_20'].isna().all():
+            fig.add_trace(
+                go.Scatter(x=df.index, y=df['EMA_20'], name='EMA 20', line=dict(color='red')),
+                row=1, col=1
+            )
+        
+        # Volume
+        colors = ['red' if row['Open'] - row['Close'] >= 0 else 'green' for _, row in df.iterrows()]
         fig.add_trace(
-            go.Scatter(x=df.index, y=df['EMA_20'], name='EMA 20', line=dict(color='red')),
-            row=1, col=1
-        )
-    
-    # Add Bollinger Bands
-    if all(col in df.columns for col in ['BB_upper', 'BB_lower']):
-        fig.add_trace(
-            go.Scatter(x=df.index, y=df['BB_upper'], name='BB Upper', line=dict(color='gray', dash='dash')),
-            row=1, col=1
-        )
-        fig.add_trace(
-            go.Scatter(x=df.index, y=df['BB_lower'], name='BB Lower', line=dict(color='gray', dash='dash')),
-            row=1, col=1
-        )
-    
-    # Volume
-    colors = ['red' if row['Open'] - row['Close'] >= 0 else 'green' for _, row in df.iterrows()]
-    fig.add_trace(
-        go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color=colors),
-        row=2, col=1
-    )
-    
-    # RSI
-    if 'RSI' in df.columns:
-        fig.add_trace(
-            go.Scatter(x=df.index, y=df['RSI'], name='RSI', line=dict(color='purple')),
+            go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color=colors),
             row=2, col=1
         )
-        # Add RSI reference lines
-        fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
-        fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
-    
-    fig.update_layout(
-        height=800,
-        showlegend=True,
-        xaxis_rangeslider_visible=False
-    )
-    
-    return fig
+        
+        # RSI if available
+        if 'RSI' in df.columns and not df['RSI'].isna().all():
+            fig.add_trace(
+                go.Scatter(x=df.index, y=df['RSI'], name='RSI', line=dict(color='purple')),
+                row=2, col=1
+            )
+            # Add RSI reference lines
+            fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+        
+        fig.update_layout(
+            height=600,
+            showlegend=True,
+            xaxis_rangeslider_visible=False
+        )
+        
+        return fig
+    except Exception as e:
+        st.error(f"Error creating chart: {e}")
+        return go.Figure()
+
+def safe_metric_display(metric_name, value, format_str="${:.2f}"):
+    """Safely display a metric with error handling"""
+    try:
+        if pd.isna(value) or value is None:
+            st.metric(metric_name, "N/A")
+        else:
+            st.metric(metric_name, format_str.format(float(value)))
+    except:
+        st.metric(metric_name, "Error")
 
 # Main app logic
 def main():
-    # Load data
-    with st.spinner('Loading stock data...'):
-        data = load_stock_data(ticker, start_date, end_date)
-    
-    if data is None:
-        st.error("Failed to load data. Please check the ticker symbol and dates.")
-        return
-    
-    if data.empty:
-        st.error("No data available for the selected ticker and date range.")
-        return
-    
-    # Calculate technical indicators
-    with st.spinner('Calculating technical indicators...'):
-        data = calculate_technical_indicators(data)
-    
-    # Display basic info
-    col1, col2, col3, col4 = st.columns(4)
-    
-    current_price = data['Close'].iloc[-1]
-    if len(data) > 1:
-        prev_price = data['Close'].iloc[-2]
-        price_change = current_price - prev_price
-        price_change_pct = (price_change / prev_price) * 100
-    else:
-        prev_price = current_price
-        price_change = 0
-        price_change_pct = 0
-    
-    with col1:
-        st.metric("Current Price", f"${current_price:.2f}")
-    with col2:
-        st.metric("Daily Change", f"${price_change:.2f}", f"{price_change_pct:.2f}%")
-    with col3:
-        st.metric("52W High", f"${data['High'].max():.2f}")
-    with col4:
-        st.metric("52W Low", f"${data['Low'].min():.2f}")
-    
-    # Display interactive chart
-    st.plotly_chart(create_interactive_chart(data), use_container_width=True)
-    
-    # Machine Learning Prediction Section
-    st.header("🤖 Machine Learning Predictions")
-    
-    # Prepare data for ML
-    with st.spinner('Preparing data for machine learning...'):
-        data_ml = create_features(data, lookback_days)
-        if len(data_ml) == 0:
-            st.error("Not enough data for machine learning after feature engineering. Try increasing the date range.")
-            return
-            
-        X, y, feature_names = prepare_ml_data(data_ml, lookback_days, forecast_days)
-    
-    if len(X) == 0:
-        st.error("Not enough data for machine learning. Try increasing the date range.")
-        return
-    
-    # Train model and get predictions
-    with st.spinner(f'Training {model_choice} model...'):
-        try:
-            model, scaler, X_test, y_test, y_pred = train_model(X, y, model_choice)
-        except Exception as e:
-            st.error(f"Error training model: {e}")
-            return
-    
-    # Calculate metrics
-    metrics = calculate_metrics(y_test.values, y_pred)
-    
-    # Display metrics
-    st.subheader("📊 Model Performance")
-    metric_cols = st.columns(5)
-    with metric_cols[0]:
-        st.metric("MAE", f"${metrics['MAE']:.2f}")
-    with metric_cols[1]:
-        st.metric("RMSE", f"${metrics['RMSE']:.2f}")
-    with metric_cols[2]:
-        st.metric("R² Score", f"{metrics['R2 Score']:.4f}")
-    with metric_cols[3]:
-        st.metric("Direction Accuracy", f"{metrics['Direction Accuracy']:.1%}")
-    
-    # Prediction vs Actual chart
-    if len(y_test) > 0:
-        fig_pred = go.Figure()
-        fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_test.values, name='Actual', line=dict(color='blue')))
-        fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_pred, name='Predicted', line=dict(color='red', dash='dash')))
-        fig_pred.update_layout(title='Actual vs Predicted Prices', xaxis_title='Date', yaxis_title='Price')
-        st.plotly_chart(fig_pred, use_container_width=True)
-    
-    # Future Prediction
-    st.subheader("🔮 Future Price Prediction")
-    
     try:
-        # Use latest data for prediction
-        latest_data = X.iloc[-1:].copy()
-        latest_scaled = scaler.transform(latest_data)
-        future_prediction = model.predict(latest_scaled)[0]
+        # Load data
+        with st.spinner('Loading stock data...'):
+            data = load_stock_data(ticker, start_date, end_date)
         
-        current_price = data['Close'].iloc[-1]
-        pred_change = future_prediction - current_price
-        pred_change_pct = (pred_change / current_price) * 100
+        if data is None or data.empty:
+            st.error("❌ Failed to load data. Please check:")
+            st.error("- Ticker symbol (e.g., AAPL, TSLA, GOOGL)")
+            st.error("- Date range")
+            st.error("- Internet connection")
+            return
         
-        pred_col1, pred_col2, pred_col3 = st.columns(3)
+        st.success(f"✅ Successfully loaded data for {ticker}")
         
-        with pred_col1:
-            st.metric("Current Price", f"${current_price:.2f}")
-        with pred_col2:
-            st.metric(f"Predicted in {forecast_days} days", f"${future_prediction:.2f}")
-        with pred_col3:
-            change_class = "prediction-positive" if pred_change > 0 else "prediction-negative"
-            st.markdown(f'<div class="{change_class}">Expected Change: ${pred_change:.2f} ({pred_change_pct:.2f}%)</div>', unsafe_allow_html=True)
+        # Calculate technical indicators
+        with st.spinner('Calculating technical indicators...'):
+            data = calculate_technical_indicators(data)
         
-        # Feature Importance (for tree-based models)
-        if hasattr(model, 'feature_importances_'):
-            st.subheader("🎯 Feature Importance")
-            feature_imp = pd.DataFrame({
-                'feature': feature_names,
-                'importance': model.feature_importances_
-            }).sort_values('importance', ascending=True)
+        # Display basic info
+        st.subheader("📈 Stock Overview")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        # Safely get current price and handle potential NaN values
+        current_price = data['Close'].iloc[-1] if not data['Close'].empty else 0
+        current_price = float(current_price) if not pd.isna(current_price) else 0
+        
+        # Calculate price change safely
+        if len(data) > 1:
+            prev_price = data['Close'].iloc[-2] if not data['Close'].empty else current_price
+            prev_price = float(prev_price) if not pd.isna(prev_price) else current_price
+            price_change = current_price - prev_price
+            price_change_pct = (price_change / prev_price) * 100 if prev_price != 0 else 0
+        else:
+            prev_price = current_price
+            price_change = 0
+            price_change_pct = 0
+        
+        with col1:
+            safe_metric_display("Current Price", current_price)
+        with col2:
+            try:
+                st.metric("Daily Change", f"${price_change:.2f}", f"{price_change_pct:.2f}%")
+            except:
+                st.metric("Daily Change", "N/A")
+        with col3:
+            safe_metric_display("52W High", data['High'].max())
+        with col4:
+            safe_metric_display("52W Low", data['Low'].min())
+        
+        # Display interactive chart
+        st.subheader("📊 Price Chart")
+        chart = create_interactive_chart(data)
+        st.plotly_chart(chart, use_container_width=True)
+        
+        # Machine Learning Prediction Section
+        st.header("🤖 Machine Learning Predictions")
+        
+        # Prepare data for ML
+        with st.spinner('Preparing data for machine learning...'):
+            data_ml = create_features(data, lookback_days)
+            if data_ml.empty:
+                st.warning("⚠️ Not enough data for machine learning. Try:")
+                st.warning("- Increasing the date range")
+                st.warning("- Choosing a more popular stock")
+                return
+                
+            X, y, feature_names = prepare_ml_data(data_ml, lookback_days, forecast_days)
+        
+        if X.empty or y.empty:
+            st.warning("⚠️ Insufficient data for training. Try adjusting parameters.")
+            return
+        
+        # Train model and get predictions
+        with st.spinner(f'Training {model_choice} model...'):
+            model, scaler, X_test, y_test, y_pred = train_model(X, y, model_choice)
             
-            fig_imp = go.Figure(go.Bar(
-                x=feature_imp['importance'],
-                y=feature_imp['feature'],
-                orientation='h'
-            ))
-            fig_imp.update_layout(title='Feature Importance', xaxis_title='Importance')
-            st.plotly_chart(fig_imp, use_container_width=True)
+            if model is None:
+                st.error("❌ Model training failed")
+                return
         
-        # Trading Suggestions
-        st.subheader("💡 Trading Suggestions")
+        # Calculate metrics
+        metrics = calculate_metrics(y_test.values, y_pred)
         
-        # Simple trading logic based on predictions and technical indicators
-        suggestion = "HOLD"
-        confidence = "Medium"
+        # Display metrics
+        st.subheader("📊 Model Performance")
+        metric_cols = st.columns(5)
+        with metric_cols[0]:
+            safe_metric_display("MAE", metrics['MAE'])
+        with metric_cols[1]:
+            safe_metric_display("RMSE", metrics['RMSE'])
+        with metric_cols[2]:
+            st.metric("R² Score", f"{metrics['R2 Score']:.4f}")
+        with metric_cols[3]:
+            st.metric("Direction Accuracy", f"{metrics['Direction Accuracy']:.1%}")
         
-        if pred_change_pct > 2:
-            suggestion = "BUY"
-            confidence = "High" if metrics['Direction Accuracy'] > 0.7 else "Medium"
-        elif pred_change_pct < -2:
-            suggestion = "SELL"
-            confidence = "High" if metrics['Direction Accuracy'] > 0.7 else "Medium"
+        # Prediction vs Actual chart
+        if len(y_test) > 0:
+            fig_pred = go.Figure()
+            fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_test.values, name='Actual', line=dict(color='blue')))
+            fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_pred, name='Predicted', line=dict(color='red', dash='dash')))
+            fig_pred.update_layout(title='Actual vs Predicted Prices', xaxis_title='Date', yaxis_title='Price')
+            st.plotly_chart(fig_pred, use_container_width=True)
         
-        # Check RSI for overbought/oversold
-        if 'RSI' in data.columns and not pd.isna(data['RSI'].iloc[-1]):
-            current_rsi = data['RSI'].iloc[-1]
-            if current_rsi > 70:
-                suggestion = "SELL (Overbought)"
-            elif current_rsi < 30:
-                suggestion = "BUY (Oversold)"
+        # Future Prediction
+        st.subheader("🔮 Future Price Prediction")
         
-        sug_col1, sug_col2 = st.columns(2)
-        with sug_col1:
-            st.info(f"**Action:** {suggestion}")
-        with sug_col2:
-            st.info(f"**Confidence:** {confidence}")
+        try:
+            # Use latest data for prediction
+            latest_data = X.iloc[-1:].copy()
+            latest_scaled = scaler.transform(latest_data)
+            future_prediction = model.predict(latest_scaled)[0]
             
+            pred_change = future_prediction - current_price
+            pred_change_pct = (pred_change / current_price) * 100 if current_price != 0 else 0
+            
+            pred_col1, pred_col2, pred_col3 = st.columns(3)
+            
+            with pred_col1:
+                safe_metric_display("Current Price", current_price)
+            with pred_col2:
+                safe_metric_display(f"Predicted in {forecast_days} days", future_prediction)
+            with pred_col3:
+                change_class = "prediction-positive" if pred_change > 0 else "prediction-negative"
+                st.markdown(f'<div class="{change_class}">Expected Change: ${pred_change:.2f} ({pred_change_pct:.2f}%)</div>', unsafe_allow_html=True)
+            
+            # Feature Importance
+            if hasattr(model, 'feature_importances_'):
+                st.subheader("🎯 Feature Importance")
+                feature_imp = pd.DataFrame({
+                    'feature': feature_names,
+                    'importance': model.feature_importances_
+                }).sort_values('importance', ascending=True)
+                
+                fig_imp = go.Figure(go.Bar(
+                    x=feature_imp['importance'],
+                    y=feature_imp['feature'],
+                    orientation='h'
+                ))
+                fig_imp.update_layout(title='Feature Importance', xaxis_title='Importance')
+                st.plotly_chart(fig_imp, use_container_width=True)
+            
+            # Trading Suggestions
+            st.subheader("💡 Trading Suggestions")
+            
+            suggestion = "HOLD"
+            confidence = "Medium"
+            
+            if pred_change_pct > 2:
+                suggestion = "BUY"
+                confidence = "High" if metrics['Direction Accuracy'] > 0.7 else "Medium"
+            elif pred_change_pct < -2:
+                suggestion = "SELL"
+                confidence = "High" if metrics['Direction Accuracy'] > 0.7 else "Medium"
+            
+            # Check RSI for overbought/oversold
+            if 'RSI' in data.columns and not pd.isna(data['RSI'].iloc[-1]):
+                current_rsi = data['RSI'].iloc[-1]
+                if current_rsi > 70:
+                    suggestion = "SELL (Overbought)"
+                elif current_rsi < 30:
+                    suggestion = "BUY (Oversold)"
+            
+            sug_col1, sug_col2 = st.columns(2)
+            with sug_col1:
+                st.info(f"**Action:** {suggestion}")
+            with sug_col2:
+                st.info(f"**Confidence:** {confidence}")
+                
+        except Exception as e:
+            st.error(f"Error making prediction: {str(e)}")
+        
     except Exception as e:
-        st.error(f"Error making prediction: {e}")
+        st.error(f"❌ Application error: {str(e)}")
+        st.info("💡 Try refreshing the page or using a different stock ticker")
     
     # Risk Disclaimer
     st.warning("""
