@@ -1,4 +1,4 @@
-# 📈 Live Stock Price Predictor
+# 📈 Stock Price Predictor
 
 A sophisticated web application that provides real-time stock analysis and price predictions using machine learning. Built with Streamlit and deployed on Streamlit Community Cloud.
 
