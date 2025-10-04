@@ -42,27 +42,54 @@ st.markdown("""
         color: red;
         font-weight: bold;
     }
+    .stock-button {
+        width: 100%;
+        margin: 2px 0;
+        font-size: 0.9rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # App title
 st.markdown('<h1 class="main-header">🚀 Advanced Stock Price Predictor</h1>', unsafe_allow_html=True)
 
-# Initialize session state for ticker if not exists
-if 'selected_ticker' not in st.session_state:
-    st.session_state.selected_ticker = "AAPL"
+# Initialize session state
+if 'current_ticker' not in st.session_state:
+    st.session_state.current_ticker = "AAPL"
 
 # Sidebar
 st.sidebar.header("📊 Configuration")
 
-# Stock selection with default value - use session state
-ticker = st.sidebar.text_input("Enter Stock Ticker", st.session_state.selected_ticker).upper()
+# Popular tickers
+popular_tickers = ["AAPL", "TSLA", "GOOGL", "MSFT", "AMZN", "META", "NVDA", "NFLX"]
 
-# Update session state when text input changes
-if ticker != st.session_state.selected_ticker:
-    st.session_state.selected_ticker = ticker
+# Create buttons for popular tickers
+st.sidebar.header("🚀 Quick Stocks")
+st.sidebar.write("Click any stock to analyze:")
+
+# Use form to handle button clicks properly
+with st.sidebar.form("ticker_selection"):
+    cols = st.columns(2)
+    selected_ticker = st.session_state.current_ticker
+    
+    for i, ticker in enumerate(popular_tickers):
+        col = cols[i % 2]
+        with col:
+            if st.form_submit_button(ticker, use_container_width=True):
+                selected_ticker = ticker
+                st.session_state.current_ticker = ticker
+                st.rerun()
+
+# Manual ticker input
+st.sidebar.header("🔍 Custom Stock")
+manual_ticker = st.sidebar.text_input("Or enter any stock ticker:", st.session_state.current_ticker).upper()
+
+if manual_ticker and manual_ticker != st.session_state.current_ticker:
+    st.session_state.current_ticker = manual_ticker
+    st.rerun()
 
 # Model selection
+st.sidebar.header("🤖 ML Settings")
 model_choice = st.sidebar.selectbox(
     "Select ML Model",
     ["Random Forest", "Gradient Boosting", "SVM", "Ensemble"]
@@ -71,6 +98,10 @@ model_choice = st.sidebar.selectbox(
 # Parameters
 lookback_days = st.sidebar.slider("Lookback Days", 5, 60, 30)
 forecast_days = st.sidebar.slider("Forecast Days", 1, 30, 7)
+
+# Display current selection
+st.sidebar.header("📈 Current Selection")
+st.sidebar.success(f"**Analyzing:** {st.session_state.current_ticker}")
 
 # Technical Indicators without TA-Lib
 def calculate_rsi(prices, window=14):
@@ -110,34 +141,19 @@ def calculate_bollinger_bands(prices, window=20, num_std=2):
         nan_series = pd.Series([np.nan] * len(prices), index=prices.index)
         return nan_series, nan_series, nan_series
 
-def calculate_momentum(prices, window=10):
-    """Calculate Price Momentum"""
-    try:
-        return prices.diff(window)
-    except:
-        return pd.Series([np.nan] * len(prices), index=prices.index)
-
-def calculate_price_roc(prices, window=10):
-    """Calculate Price Rate of Change"""
-    try:
-        return ((prices - prices.shift(window)) / prices.shift(window)) * 100
-    except:
-        return pd.Series([np.nan] * len(prices), index=prices.index)
-
-def load_stock_data_ultra_simple(ticker_symbol):
-    """ULTRA SIMPLE stock data loading - no date operations at all"""
+def load_stock_data(ticker_symbol):
+    """Load stock data from Yahoo Finance"""
     try:
         # Create ticker object
         stock = yf.Ticker(ticker_symbol)
         
-        # Get historical data - using the simplest method possible
-        data = stock.history(period="2y")  # 2 years should be enough
+        # Get historical data for 2 years
+        data = stock.history(period="2y")
         
         if data.empty:
             return None, f"No data found for {ticker_symbol}"
         
-        # COMPLETELY AVOID DATETIME OPERATIONS
-        # Just reset the index to avoid timezone issues entirely
+        # Reset index to avoid timezone issues
         data = data.reset_index()
         
         # Ensure numeric columns
@@ -162,12 +178,6 @@ def load_stock_data_ultra_simple(ticker_symbol):
     except Exception as e:
         return None, f"Error loading {ticker_symbol}: {str(e)}"
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour
-def load_stock_data(_ticker):
-    """Cached version of stock data loading"""
-    return load_stock_data_ultra_simple(_ticker)
-
-@st.cache_data
 def calculate_technical_indicators(df):
     """Calculate technical indicators without TA-Lib"""
     try:
@@ -188,13 +198,6 @@ def calculate_technical_indicators(df):
         
         # Bollinger Bands
         df['BB_upper'], df['BB_middle'], df['BB_lower'] = calculate_bollinger_bands(df['Close'])
-        
-        # Volume indicators
-        df['Volume_SMA'] = df['Volume'].rolling(window=20).mean()
-        
-        # Price trends
-        df['Price_Rate_Of_Change'] = calculate_price_roc(df['Close'], 10)
-        df['Momentum'] = calculate_momentum(df['Close'], 10)
         
         return df
     except Exception as e:
@@ -223,10 +226,6 @@ def create_features(df, lookback=30):
         df['Daily_Return'] = df['Close'].pct_change()
         df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
         
-        # Additional technical features
-        df['High_Low_Ratio'] = df['High'] / df['Low']
-        df['Open_Close_Ratio'] = df['Open'] / df['Close']
-        
         # Drop NaN values
         df = df.dropna()
         
@@ -239,11 +238,9 @@ def prepare_ml_data(df, lookback=30, forecast_days=1):
     try:
         features = ['Open', 'High', 'Low', 'Close', 'Volume', 'SMA_20', 'EMA_20', 
                     'RSI', 'MACD', 'MACD_signal', 'BB_upper', 'BB_lower',
-                    'Volume_SMA', 'Price_Rate_Of_Change', 'Momentum',
                     'Price_Lag_1', 'Price_Lag_5', 'Price_Lag_10',
                     'Rolling_Mean_7', 'Rolling_Std_7', 'Rolling_Mean_21', 'Rolling_Std_21',
-                    'Volatility', 'Daily_Return', 'Price_Range',
-                    'High_Low_Ratio', 'Open_Close_Ratio']
+                    'Volatility', 'Daily_Return', 'Price_Range']
         
         # Select available features
         available_features = [f for f in features if f in df.columns]
@@ -383,29 +380,13 @@ def safe_metric_display(metric_name, value, format_str="${:.2f}"):
 
 # Main app logic
 def main():
-    # Quick test buttons
-    st.sidebar.header("🚀 Quick Test Stocks")
-    popular_tickers = ["AAPL", "TSLA", "GOOGL", "MSFT", "AMZN", "META", "NVDA", "NFLX"]
+    current_ticker = st.session_state.current_ticker
     
-    # Create buttons for popular tickers
-    st.sidebar.write("Click any stock to analyze:")
-    cols = st.sidebar.columns(2)
-    
-    for i, tick in enumerate(popular_tickers):
-        col = cols[i % 2]
-        with col:
-            if st.button(tick, key=f"btn_{tick}", use_container_width=True):
-                st.session_state.selected_ticker = tick
-                st.rerun()
-    
-    # Display current selected ticker
-    st.sidebar.write(f"**Current Stock:** {st.session_state.selected_ticker}")
-    
-    # Use the selected ticker from session state
-    current_ticker = st.session_state.selected_ticker
+    # Display current stock prominently
+    st.header(f"📈 Analyzing: {current_ticker}")
     
     try:
-        # Load data
+        # Load data with cache clear for new ticker
         with st.spinner(f'📥 Loading data for {current_ticker}...'):
             data, message = load_stock_data(current_ticker)
         
@@ -418,7 +399,7 @@ def main():
             for i, tick in enumerate(popular_tickers):
                 with main_cols[i % 4]:
                     if st.button(f"📈 {tick}", key=f"main_btn_{tick}", use_container_width=True):
-                        st.session_state.selected_ticker = tick
+                        st.session_state.current_ticker = tick
                         st.rerun()
             return
         
@@ -427,13 +408,19 @@ def main():
         # Show data preview
         with st.expander("📋 Data Preview (Last 10 days)"):
             st.dataframe(data.tail(10))
+            
+            # Show some statistics to verify different data
+            st.write(f"**Data Statistics for {current_ticker}:**")
+            st.write(f"- Date Range: {data.index[0].strftime('%Y-%m-%d')} to {data.index[-1].strftime('%Y-%m-%d')}")
+            st.write(f"- Current Price: ${data['Close'].iloc[-1]:.2f}")
+            st.write(f"- Average Price: ${data['Close'].mean():.2f}")
         
         # Calculate technical indicators
         with st.spinner('Calculating technical indicators...'):
             data = calculate_technical_indicators(data)
         
         # Display basic info
-        st.subheader(f"📈 {current_ticker} Stock Overview")
+        st.subheader("📊 Stock Metrics")
         col1, col2, col3, col4 = st.columns(4)
         
         # Safely get current price and handle potential NaN values
@@ -459,12 +446,12 @@ def main():
             except:
                 st.metric("Daily Change", "N/A")
         with col3:
-            safe_metric_display("All Time High", data['High'].max())
+            safe_metric_display("Period High", data['High'].max())
         with col4:
-            safe_metric_display("All Time Low", data['Low'].min())
+            safe_metric_display("Period Low", data['Low'].min())
         
         # Display interactive chart
-        st.subheader("📊 Price Chart")
+        st.subheader("📈 Price Chart")
         chart = create_interactive_chart(data, current_ticker)
         st.plotly_chart(chart, use_container_width=True)
         
@@ -511,14 +498,6 @@ def main():
             st.metric("R² Score", f"{metrics['R2 Score']:.4f}")
         with metric_cols[3]:
             st.metric("Direction Accuracy", f"{metrics['Direction Accuracy']:.1%}")
-        
-        # Prediction vs Actual chart
-        if len(y_test) > 0:
-            fig_pred = go.Figure()
-            fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_test.values, name='Actual', line=dict(color='blue')))
-            fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_pred, name='Predicted', line=dict(color='red', dash='dash')))
-            fig_pred.update_layout(title=f'{current_ticker} - Actual vs Predicted Prices', xaxis_title='Date', yaxis_title='Price')
-            st.plotly_chart(fig_pred, use_container_width=True)
         
         # Future Prediction
         st.subheader("🔮 Future Price Prediction")
@@ -575,7 +554,7 @@ def main():
         
     except Exception as e:
         st.error(f"❌ Application error: {str(e)}")
-        st.info("💡 Try clicking one of the popular stock buttons in the sidebar")
+        st.info("💡 Try clicking one of the stock buttons in the sidebar")
     
     # Risk Disclaimer
     st.warning("""
