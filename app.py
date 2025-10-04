@@ -116,22 +116,21 @@ def calculate_price_roc(prices, window=10):
     except:
         return pd.Series([np.nan] * len(prices), index=prices.index)
 
-def load_stock_data_simple(ticker_symbol):
-    """Simple and robust stock data loading - NO DATE FILTERING"""
+def load_stock_data_ultra_simple(ticker_symbol):
+    """ULTRA SIMPLE stock data loading - no date operations at all"""
     try:
         # Create ticker object
         stock = yf.Ticker(ticker_symbol)
         
-        # Get historical data for 3 years (enough data for ML)
-        # Using period instead of dates to avoid timezone issues
-        data = stock.history(period="3y")
+        # Get historical data - using the simplest method possible
+        data = stock.history(period="2y")  # 2 years should be enough
         
         if data.empty:
             return None, f"No data found for {ticker_symbol}"
-            
-        # Remove timezone information completely
-        if data.index.tz is not None:
-            data.index = data.index.tz_localize(None)
+        
+        # COMPLETELY AVOID DATETIME OPERATIONS
+        # Just reset the index to avoid timezone issues entirely
+        data = data.reset_index()
         
         # Ensure numeric columns
         numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
@@ -145,6 +144,11 @@ def load_stock_data_simple(ticker_symbol):
         if len(data) < 30:
             return None, f"Only {len(data)} days of data available. Need at least 30 days."
             
+        # Set Date as index again but without timezone
+        if 'Date' in data.columns:
+            data['Date'] = pd.to_datetime(data['Date']).dt.tz_localize(None)
+            data = data.set_index('Date')
+            
         return data, "Success"
         
     except Exception as e:
@@ -153,7 +157,7 @@ def load_stock_data_simple(ticker_symbol):
 @st.cache_data
 def load_stock_data(_ticker):
     """Cached version of stock data loading"""
-    return load_stock_data_simple(_ticker)
+    return load_stock_data_ultra_simple(_ticker)
 
 @st.cache_data
 def calculate_technical_indicators(df):
