@@ -187,7 +187,7 @@ The app is fully optimized for mobile devices with:
 - Mobile-optimized charts
 - Fast loading times
 
-## 🐛 Troubleshooting
+## 🔧 Troubleshooting
 
 ### Common Issues
 
