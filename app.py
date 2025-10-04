@@ -117,19 +117,21 @@ def calculate_price_roc(prices, window=10):
         return pd.Series([np.nan] * len(prices), index=prices.index)
 
 def load_stock_data_simple(ticker_symbol):
-    """Simple and robust stock data loading without date filtering"""
+    """Simple and robust stock data loading - NO DATE FILTERING"""
     try:
         # Create ticker object
         stock = yf.Ticker(ticker_symbol)
         
         # Get historical data for 3 years (enough data for ML)
+        # Using period instead of dates to avoid timezone issues
         data = stock.history(period="3y")
         
         if data.empty:
             return None, f"No data found for {ticker_symbol}"
             
-        # Remove timezone information to avoid comparison issues
-        data.index = data.index.tz_localize(None)
+        # Remove timezone information completely
+        if data.index.tz is not None:
+            data.index = data.index.tz_localize(None)
         
         # Ensure numeric columns
         numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
@@ -375,11 +377,18 @@ def main():
     # Display popular tickers as buttons
     selected_ticker = ticker
     
-    cols = st.sidebar.columns(2)
-    for i, tick in enumerate(popular_tickers):
-        with cols[i % 2]:
-            if st.button(tick, key=f"btn_{tick}", use_container_width=True):
-                selected_ticker = tick
+    # Create buttons for popular tickers
+    for i in range(0, len(popular_tickers), 2):
+        cols = st.sidebar.columns(2)
+        tick1 = popular_tickers[i]
+        with cols[0]:
+            if st.button(tick1, key=f"btn_{tick1}", use_container_width=True):
+                selected_ticker = tick1
+        if i + 1 < len(popular_tickers):
+            tick2 = popular_tickers[i + 1]
+            with cols[1]:
+                if st.button(tick2, key=f"btn_{tick2}", use_container_width=True):
+                    selected_ticker = tick2
     
     # Use the selected ticker
     current_ticker = selected_ticker
@@ -398,6 +407,7 @@ def main():
             for i, tick in enumerate(popular_tickers):
                 with main_cols[i % 4]:
                     if st.button(f"📈 {tick}", key=f"main_btn_{tick}", use_container_width=True):
+                        # Use session state to remember the selection
                         st.session_state.selected_ticker = tick
                         st.rerun()
             return
