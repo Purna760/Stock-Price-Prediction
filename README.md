@@ -63,7 +63,7 @@ A sophisticated web application that provides real-time stock analysis and price
 
 3. **Your app will be live** at:
    ```
-   https://share.streamlit.io/your-username/stock-predictor/main/app.py
+   [https://share.streamlit.io/your-username/stock-predictor/main/app.py](https://stock-price-prediction-ml.streamlit.app/)
    ```
 
 ### Local Development
