@@ -48,11 +48,19 @@ st.markdown("""
 # App title
 st.markdown('<h1 class="main-header">🚀 Advanced Stock Price Predictor</h1>', unsafe_allow_html=True)
 
+# Initialize session state for ticker if not exists
+if 'selected_ticker' not in st.session_state:
+    st.session_state.selected_ticker = "AAPL"
+
 # Sidebar
 st.sidebar.header("📊 Configuration")
 
-# Stock selection with default value
-ticker = st.sidebar.text_input("Enter Stock Ticker", "AAPL").upper()
+# Stock selection with default value - use session state
+ticker = st.sidebar.text_input("Enter Stock Ticker", st.session_state.selected_ticker).upper()
+
+# Update session state when text input changes
+if ticker != st.session_state.selected_ticker:
+    st.session_state.selected_ticker = ticker
 
 # Model selection
 model_choice = st.sidebar.selectbox(
@@ -154,7 +162,7 @@ def load_stock_data_ultra_simple(ticker_symbol):
     except Exception as e:
         return None, f"Error loading {ticker_symbol}: {str(e)}"
 
-@st.cache_data
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def load_stock_data(_ticker):
     """Cached version of stock data loading"""
     return load_stock_data_ultra_simple(_ticker)
@@ -317,12 +325,12 @@ def calculate_metrics(y_true, y_pred):
             'MAE': 0, 'MSE': 0, 'RMSE': 0, 'R2 Score': 0, 'Direction Accuracy': 0
         }
 
-def create_interactive_chart(df):
+def create_interactive_chart(df, ticker):
     """Create interactive Plotly chart"""
     try:
         fig = make_subplots(
             rows=2, cols=1,
-            subplot_titles=('Price Chart', 'Volume'),
+            subplot_titles=(f'{ticker} Price Chart', 'Volume'),
             vertical_spacing=0.1,
             row_heights=[0.7, 0.3]
         )
@@ -355,7 +363,8 @@ def create_interactive_chart(df):
         fig.update_layout(
             height=600,
             showlegend=True,
-            xaxis_rangeslider_visible=False
+            xaxis_rangeslider_visible=False,
+            title=f"{ticker} Stock Analysis"
         )
         
         return fig
@@ -375,27 +384,25 @@ def safe_metric_display(metric_name, value, format_str="${:.2f}"):
 # Main app logic
 def main():
     # Quick test buttons
-    st.sidebar.header("🚀 Quick Test")
+    st.sidebar.header("🚀 Quick Test Stocks")
     popular_tickers = ["AAPL", "TSLA", "GOOGL", "MSFT", "AMZN", "META", "NVDA", "NFLX"]
     
-    # Display popular tickers as buttons
-    selected_ticker = ticker
-    
     # Create buttons for popular tickers
-    for i in range(0, len(popular_tickers), 2):
-        cols = st.sidebar.columns(2)
-        tick1 = popular_tickers[i]
-        with cols[0]:
-            if st.button(tick1, key=f"btn_{tick1}", use_container_width=True):
-                selected_ticker = tick1
-        if i + 1 < len(popular_tickers):
-            tick2 = popular_tickers[i + 1]
-            with cols[1]:
-                if st.button(tick2, key=f"btn_{tick2}", use_container_width=True):
-                    selected_ticker = tick2
+    st.sidebar.write("Click any stock to analyze:")
+    cols = st.sidebar.columns(2)
     
-    # Use the selected ticker
-    current_ticker = selected_ticker
+    for i, tick in enumerate(popular_tickers):
+        col = cols[i % 2]
+        with col:
+            if st.button(tick, key=f"btn_{tick}", use_container_width=True):
+                st.session_state.selected_ticker = tick
+                st.rerun()
+    
+    # Display current selected ticker
+    st.sidebar.write(f"**Current Stock:** {st.session_state.selected_ticker}")
+    
+    # Use the selected ticker from session state
+    current_ticker = st.session_state.selected_ticker
     
     try:
         # Load data
@@ -411,7 +418,6 @@ def main():
             for i, tick in enumerate(popular_tickers):
                 with main_cols[i % 4]:
                     if st.button(f"📈 {tick}", key=f"main_btn_{tick}", use_container_width=True):
-                        # Use session state to remember the selection
                         st.session_state.selected_ticker = tick
                         st.rerun()
             return
@@ -427,7 +433,7 @@ def main():
             data = calculate_technical_indicators(data)
         
         # Display basic info
-        st.subheader("📈 Stock Overview")
+        st.subheader(f"📈 {current_ticker} Stock Overview")
         col1, col2, col3, col4 = st.columns(4)
         
         # Safely get current price and handle potential NaN values
@@ -459,7 +465,7 @@ def main():
         
         # Display interactive chart
         st.subheader("📊 Price Chart")
-        chart = create_interactive_chart(data)
+        chart = create_interactive_chart(data, current_ticker)
         st.plotly_chart(chart, use_container_width=True)
         
         # Check if we have enough data for ML
@@ -511,7 +517,7 @@ def main():
             fig_pred = go.Figure()
             fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_test.values, name='Actual', line=dict(color='blue')))
             fig_pred.add_trace(go.Scatter(x=y_test.index, y=y_pred, name='Predicted', line=dict(color='red', dash='dash')))
-            fig_pred.update_layout(title='Actual vs Predicted Prices', xaxis_title='Date', yaxis_title='Price')
+            fig_pred.update_layout(title=f'{current_ticker} - Actual vs Predicted Prices', xaxis_title='Date', yaxis_title='Price')
             st.plotly_chart(fig_pred, use_container_width=True)
         
         # Future Prediction
