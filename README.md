@@ -70,7 +70,7 @@ A sophisticated web application that provides real-time stock analysis and price
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/your-username/stock-predictor.git
+   git clone https://github.com/Purna760/Stock-Price-Prediction.git
    cd stock-predictor
    ```
 
